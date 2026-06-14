@@ -385,15 +385,15 @@ func (c *Client) Politicians(ctx context.Context, opts PoliticiansOptions) ([]*P
 		Province string         `json:"province"`
 	}
 	type wirePolitician struct {
-		URL            string      `json:"url"`
-		Name           string      `json:"name"`
-		CurrentParty   *wireParty  `json:"current_party"`
-		CurrentRiding  *wireRiding `json:"current_riding"`
+		URL           string      `json:"url"`
+		Name          string      `json:"name"`
+		CurrentParty  *wireParty  `json:"current_party"`
+		CurrentRiding *wireRiding `json:"current_riding"`
 		// some endpoints also use "riding"
-		Riding         *wireRiding `json:"riding"`
-		Email          string      `json:"email"`
-		Gender         string      `json:"gender"`
-		Image          string      `json:"image"`
+		Riding *wireRiding `json:"riding"`
+		Email  string      `json:"email"`
+		Gender string      `json:"gender"`
+		Image  string      `json:"image"`
 	}
 
 	var resp wireListResp[wirePolitician]

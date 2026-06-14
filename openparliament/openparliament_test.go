@@ -77,9 +77,9 @@ func TestBills(t *testing.T) {
 				"status":                 map[string]string{"en": "At second reading", "fr": "..."},
 			},
 			{
-				"url":    "/bills/44-1/C-2/",
-				"number": "C-2",
-				"name":   map[string]string{"en": "Another Act", "fr": "..."},
+				"url":        "/bills/44-1/C-2/",
+				"number":     "C-2",
+				"name":       map[string]string{"en": "Another Act", "fr": "..."},
 				"introduced": "2021-11-23",
 				"law":        true,
 				"status":     map[string]string{"en": "Royal Assent", "fr": "..."},
@@ -235,7 +235,7 @@ func TestPoliticians(t *testing.T) {
 				"gender": "F",
 			},
 		},
-		"pagination": map[string]any{"next_url": nil},
+		"pagination":  map[string]any{"next_url": nil},
 		"total_count": 2,
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

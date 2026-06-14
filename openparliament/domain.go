@@ -2,7 +2,6 @@ package openparliament
 
 import (
 	"context"
-	"net/url"
 	"strings"
 
 	"github.com/tamnd/any-cli/kit"
@@ -17,69 +16,62 @@ import (
 // exactly as a database/sql program enables a driver with `import _
 // "github.com/lib/pq"`. The init below registers it; the host then dereferences
 // openparliament:// URIs by routing to the operations Register installs. The same
-// Domain also builds the standalone openparliament binary (see cli.NewApp), so the
-// binary and a host share one source of truth.
-//
-// This is the scaffold's starting point: one resource type, "page", served by a
-// resolver op and a list op. Add your real types here as you model the site.
+// Domain also builds the standalone openparliament binary, so binary and host
+// share one source of truth.
 func init() { kit.Register(Domain{}) }
 
-// Domain is the openparliament driver. It carries no state; the per-run client is
-// built by the factory Register hands kit.
+// Domain is the openparliament driver. It carries no state; the per-run client
+// is built by the factory Register hands kit.
 type Domain struct{}
 
-// Info describes the scheme, the hostnames a pasted link is matched against, and
-// the identity reused for the binary's help and version.
+// Info describes the scheme, the hostnames a pasted link is matched against,
+// and the identity reused for the binary's help and version.
 func (Domain) Info() kit.DomainInfo {
 	return kit.DomainInfo{
 		Scheme: "openparliament",
 		Hosts:  []string{Host},
 		Identity: kit.Identity{
 			Binary: "openparliament",
-			Short:  "A command line for openparliament.",
-			Long: `A command line for openparliament.
+			Short:  "Read public Canadian Parliament data from OpenParliament.",
+			Long: `Read public Canadian Parliament data from OpenParliament.
 
-openparliament reads public openparliament data over plain HTTPS, shapes it into
-clean records, and prints output that pipes into the rest of your tools. No API
-key, nothing to run alongside it.`,
-			Site: Host,
+openparliament reads bills, votes, and politician data from
+api.openparliament.ca over plain HTTPS and shapes it into clean records
+that pipe into the rest of your tools. No API key required.`,
+			Site: "https://api.openparliament.ca",
 			Repo: "https://github.com/tamnd/openparliament-cli",
 		},
 	}
 }
 
-// Register installs the client factory and every operation onto app. A resolver
-// op (Single) names its own record type and answers `ant get`; a List op
-// enumerates a parent resource's members and answers `ant ls`.
+// Register installs the client factory and every operation onto app.
 func (Domain) Register(app *kit.App) {
 	app.SetClient(newClient)
 
-	// Resolver op: one record per id, the home of `openparliament page` and
-	// `ant get openparliament://page/<id>`.
-	kit.Handle(app, kit.OpMeta{Name: "page", Group: "read", Single: true,
-		Summary: "Fetch a page by path or URL", URIType: "page", Resolver: true,
-		Args: []kit.Arg{{Name: "ref", Help: "page path or URL"}}}, getPage)
+	// bills — list parliamentary bills
+	kit.Handle(app, kit.OpMeta{Name: "bills", Group: "read", List: true,
+		Summary: "List parliamentary bills"}, listBills)
 
-	// List op: members of a page, the home of `openparliament links` and `ant ls`.
-	// It emits page stubs, so every listed member is itself an addressable
-	// openparliament://page/ URI a host can follow.
-	kit.Handle(app, kit.OpMeta{Name: "links", Group: "read", List: true,
-		Summary: "List the pages a page links to", URIType: "page",
-		Args: []kit.Arg{{Name: "ref", Help: "page path or URL"}}}, listLinks)
+	// bill — fetch a single bill by session and number
+	kit.Handle(app, kit.OpMeta{Name: "bill", Group: "read", Single: true,
+		Summary: "Get a single bill by session and number",
+		Args: []kit.Arg{
+			{Name: "session", Help: "parliament session (e.g. 44-1)"},
+			{Name: "number", Help: "bill number (e.g. C-14)"},
+		}}, getBill)
 
-	// Search op: a free-text query, the home of `openparliament search` and the
-	// search box a host (ant) shows for this domain. A top-level op named "search"
-	// is exactly what kit.Host.Searchable looks for. Like links it emits page
-	// stubs, so a host can follow any hit to its own openparliament://page/ URI.
-	kit.Handle(app, kit.OpMeta{Name: "search", Group: "read",
-		Summary: "Search openparliament",
-		Args:    []kit.Arg{{Name: "query", Help: "search query"}}}, searchPages)
+	// votes — list parliamentary votes
+	kit.Handle(app, kit.OpMeta{Name: "votes", Group: "read", List: true,
+		Summary: "List parliamentary votes"}, listVotes)
+
+	// politicians — list members of Parliament
+	kit.Handle(app, kit.OpMeta{Name: "politicians", Group: "read", List: true,
+		Summary: "List members of Parliament"}, listPoliticians)
 }
 
-// newClient builds the client from the host-resolved config, so a host and the
-// standalone binary pace and identify themselves the same way.
+// newClient builds the client from the host-resolved config.
 func newClient(_ context.Context, cfg kit.Config) (any, error) {
-	c := NewClient()
+	c := DefaultConfig()
 	if cfg.UserAgent != "" {
 		c.UserAgent = cfg.UserAgent
 	}
@@ -90,51 +82,90 @@ func newClient(_ context.Context, cfg kit.Config) (any, error) {
 		c.Retries = cfg.Retries
 	}
 	if cfg.Timeout > 0 {
-		c.HTTP.Timeout = cfg.Timeout
+		c.Timeout = cfg.Timeout
 	}
-	return c, nil
+	return NewClientWithConfig(c), nil
 }
 
-// --- inputs ---
-//
-// Each handler takes a typed input struct. kit fills the fields from the tags:
-// kit:"arg" is a positional argument, kit:"flag,inherit" binds the framework's
-// shared flag of the same name, and kit:"inject" receives the client newClient
-// builds.
+// ---- input structs ----
 
-type pageRef struct {
-	Ref    string  `kit:"arg" help:"page path or URL"`
-	Client *Client `kit:"inject"`
+type billsInput struct {
+	Session string  `kit:"flag" help:"parliament session (e.g. 44-1)"`
+	Limit   int     `kit:"flag,inherit" help:"max results"`
+	Client  *Client `kit:"inject"`
 }
 
-type listRef struct {
-	Ref    string  `kit:"arg" help:"page path or URL"`
+type billInput struct {
+	Session string  `kit:"arg" help:"parliament session (e.g. 44-1)"`
+	Number  string  `kit:"arg" help:"bill number (e.g. C-14)"`
+	Client  *Client `kit:"inject"`
+}
+
+type votesInput struct {
+	Session string  `kit:"flag" help:"parliament session (e.g. 44-1)"`
+	Bill    string  `kit:"flag" help:"bill URL fragment (e.g. /bills/44-1/C-14/)"`
+	Limit   int     `kit:"flag,inherit" help:"max results"`
+	Client  *Client `kit:"inject"`
+}
+
+type politiciansInput struct {
+	Party  string  `kit:"flag" help:"filter by party short name (e.g. Conservative)"`
 	Limit  int     `kit:"flag,inherit" help:"max results"`
 	Client *Client `kit:"inject"`
 }
 
-type searchRef struct {
-	Query  string  `kit:"arg" help:"search query"`
-	Limit  int     `kit:"flag,inherit" help:"max results"`
-	Client *Client `kit:"inject"`
-}
+// ---- handlers ----
 
-// --- handlers ---
-
-func getPage(ctx context.Context, in pageRef, emit func(*Page) error) error {
-	p, err := in.Client.GetPage(ctx, pagePath(in.Ref))
+func listBills(ctx context.Context, in billsInput, emit func(*Bill) error) error {
+	bills, err := in.Client.Bills(ctx, BillsOptions{
+		Session: in.Session,
+		Limit:   in.Limit,
+	})
 	if err != nil {
 		return mapErr(err)
 	}
-	return emit(p)
+	for _, b := range bills {
+		if err := emit(b); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-func listLinks(ctx context.Context, in listRef, emit func(*Page) error) error {
-	pages, err := in.Client.PageLinks(ctx, pagePath(in.Ref), in.Limit)
+func getBill(ctx context.Context, in billInput, emit func(*Bill) error) error {
+	b, err := in.Client.GetBill(ctx, in.Session, in.Number)
 	if err != nil {
 		return mapErr(err)
 	}
-	for _, p := range pages {
+	return emit(b)
+}
+
+func listVotes(ctx context.Context, in votesInput, emit func(*Vote) error) error {
+	votes, err := in.Client.Votes(ctx, VotesOptions{
+		Session: in.Session,
+		Bill:    in.Bill,
+		Limit:   in.Limit,
+	})
+	if err != nil {
+		return mapErr(err)
+	}
+	for _, v := range votes {
+		if err := emit(v); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func listPoliticians(ctx context.Context, in politiciansInput, emit func(*Politician) error) error {
+	politicians, err := in.Client.Politicians(ctx, PoliticiansOptions{
+		Party: in.Party,
+		Limit: in.Limit,
+	})
+	if err != nil {
+		return mapErr(err)
+	}
+	for _, p := range politicians {
 		if err := emit(p); err != nil {
 			return err
 		}
@@ -142,59 +173,51 @@ func listLinks(ctx context.Context, in listRef, emit func(*Page) error) error {
 	return nil
 }
 
-func searchPages(ctx context.Context, in searchRef, emit func(*Page) error) error {
-	pages, err := in.Client.Search(ctx, in.Query, in.Limit)
-	if err != nil {
-		return mapErr(err)
-	}
-	for _, p := range pages {
-		if err := emit(p); err != nil {
-			return err
-		}
-	}
-	return nil
-}
+// ---- Resolver: pure string functions, no network ----
 
-// --- Resolver: the URI-native string functions, pure and network-free ---
-
-// Classify turns any accepted input — a bare path or a full openparliament.com URL —
-// into the canonical (type, id), so `ant resolve` and `ant url` touch no network.
+// Classify turns any accepted input into the canonical (type, id).
 func (Domain) Classify(input string) (uriType, id string, err error) {
-	id = pagePath(input)
-	if id == "" {
-		return "", "", errs.Usage("unrecognized openparliament reference: %q", input)
+	input = strings.TrimSpace(input)
+	// strip URL scheme+host
+	if strings.HasPrefix(input, "https://") || strings.HasPrefix(input, "http://") {
+		for _, prefix := range []string{"https://", "http://"} {
+			if strings.HasPrefix(input, prefix) {
+				input = input[len(prefix):]
+			}
+		}
+		if slash := strings.IndexByte(input, '/'); slash >= 0 {
+			input = input[slash:]
+		} else {
+			input = ""
+		}
 	}
-	return "page", id, nil
+	input = strings.Trim(input, "/")
+	if input == "" {
+		return "", "", errs.Usage("unrecognized openparliament reference: empty")
+	}
+	switch {
+	case strings.HasPrefix(input, "bills/"):
+		return "bill", input, nil
+	case strings.HasPrefix(input, "votes/"):
+		return "vote", input, nil
+	case strings.HasPrefix(input, "politicians/"):
+		return "politician", input, nil
+	default:
+		return "page", input, nil
+	}
 }
 
-// Locate is the inverse: the live https URL for a (type, id).
+// Locate returns the live https URL for a (type, id).
 func (Domain) Locate(uriType, id string) (string, error) {
-	if uriType != "page" {
+	switch uriType {
+	case "bill", "vote", "politician", "page":
+		return BaseURL + "/" + strings.Trim(id, "/") + "/", nil
+	default:
 		return "", errs.Usage("openparliament has no resource type %q", uriType)
 	}
-	return BaseURL + "/" + strings.Trim(id, "/"), nil
 }
 
-// --- helpers ---
-
-// pagePath turns any accepted input into the canonical page id: the path of a
-// full URL on this host, or a bare path with its slashes trimmed.
-func pagePath(input string) string {
-	input = strings.TrimSpace(input)
-	if u, err := url.Parse(input); err == nil && (u.Scheme == "http" || u.Scheme == "https") {
-		return strings.Trim(u.Path, "/")
-	}
-	return strings.Trim(input, "/")
-}
-
-// mapErr converts a library error into the kit error kind that carries the right
-// exit code, so a host renders the same outcomes the standalone binary does. As
-// you add sentinel errors to the library, map them here, for example:
-//
-//	case errors.Is(err, ErrNotFound):
-//		return errs.NotFound("%s", err.Error())
-//	case errors.Is(err, ErrRateLimited):
-//		return errs.RateLimited("%s", err.Error())
+// mapErr converts library errors into kit error kinds with the right exit code.
 func mapErr(err error) error {
 	return err
 }

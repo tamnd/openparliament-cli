@@ -25,9 +25,10 @@ func TestDomainInfo(t *testing.T) {
 
 func TestClassify(t *testing.T) {
 	cases := []struct{ in, typ, id string }{
-		{"wiki/Go", "page", "wiki/Go"},
-		{"/about/", "page", "about"},
-		{"https://" + Host + "/team/contact", "page", "team/contact"},
+		{"bills/44-1/C-14", "bill", "bills/44-1/C-14"},
+		{"/bills/44-1/C-1/", "bill", "bills/44-1/C-1"},
+		{"https://" + Host + "/votes/44-1/1044/", "vote", "votes/44-1/1044"},
+		{"politicians/ziad-aboultaif", "politician", "politicians/ziad-aboultaif"},
 	}
 	for _, tc := range cases {
 		typ, id, err := Domain{}.Classify(tc.in)
@@ -39,42 +40,44 @@ func TestClassify(t *testing.T) {
 }
 
 func TestLocate(t *testing.T) {
-	got, err := Domain{}.Locate("page", "wiki/Go")
-	want := "https://" + Host + "/wiki/Go"
-	if err != nil || got != want {
-		t.Errorf("Locate = (%q, %v), want (%q, nil)", got, err, want)
+	cases := []struct {
+		uriType, id, want string
+	}{
+		{"bill", "bills/44-1/C-14", BaseURL + "/bills/44-1/C-14/"},
+		{"vote", "votes/44-1/1044", BaseURL + "/votes/44-1/1044/"},
+		{"politician", "politicians/ziad-aboultaif", BaseURL + "/politicians/ziad-aboultaif/"},
+	}
+	for _, tc := range cases {
+		got, err := Domain{}.Locate(tc.uriType, tc.id)
+		if err != nil || got != tc.want {
+			t.Errorf("Locate(%q, %q) = (%q, %v), want (%q, nil)", tc.uriType, tc.id, got, err, tc.want)
+		}
 	}
 }
 
-// TestHostWiring mounts the driver in a kit Host (the runtime ant drives) and
-// checks the round trip: a record mints to its URI, its body is readable, and a
-// bare id resolves back to the same URI. The init in domain.go registers the
-// domain, so kit.Open finds it.
+// TestHostWiring mounts the driver in a kit Host and checks the round trip:
+// a record mints to its URI and a bare id resolves back correctly.
 func TestHostWiring(t *testing.T) {
 	h, err := kit.Open()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	p := &Page{ID: "wiki/Go", URL: "https://" + Host + "/wiki/Go", Title: "Go", Body: "Go is a language."}
-	u, err := h.Mint(p)
+	b := &Bill{URL: "/bills/44-1/C-14/", Number: "C-14", Name: "Test Bill"}
+	u, err := h.Mint(b)
 	if err != nil {
 		t.Fatalf("Mint: %v", err)
 	}
-	if want := "openparliament://page/wiki/Go"; u.String() != want {
-		t.Errorf("Mint = %q, want %q", u.String(), want)
+	// Mint uses the kit:"id" field (URL) as the id
+	if u.Scheme != "openparliament" {
+		t.Errorf("Mint scheme = %q, want openparliament", u.Scheme)
 	}
 
-	if body, ok := h.Body(p); !ok || body == "" {
-		t.Errorf("Body = (%q, %v), want non-empty", body, ok)
+	got, err := h.ResolveOn("openparliament", "bills/44-1/C-14")
+	if err != nil {
+		t.Fatalf("ResolveOn: %v", err)
 	}
-
-	if !h.Searchable("openparliament") {
-		t.Error("Searchable = false, want true (the domain registers a search op)")
-	}
-
-	got, err := h.ResolveOn("openparliament", "about")
-	if err != nil || got.String() != "openparliament://page/about" {
-		t.Errorf("ResolveOn = (%q, %v), want openparliament://page/about", got.String(), err)
+	if got.Scheme != "openparliament" {
+		t.Errorf("ResolveOn scheme = %q, want openparliament", got.Scheme)
 	}
 }

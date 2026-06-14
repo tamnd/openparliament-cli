@@ -181,9 +181,7 @@ func (Domain) Classify(input string) (uriType, id string, err error) {
 	// strip URL scheme+host
 	if strings.HasPrefix(input, "https://") || strings.HasPrefix(input, "http://") {
 		for _, prefix := range []string{"https://", "http://"} {
-			if strings.HasPrefix(input, prefix) {
-				input = input[len(prefix):]
-			}
+			input = strings.TrimPrefix(input, prefix)
 		}
 		if slash := strings.IndexByte(input, '/'); slash >= 0 {
 			input = input[slash:]
